@@ -7,12 +7,16 @@ from joint_angle_pd_controller import AnglePDController
 from railrl.misc.eval_util import create_stats_ordered_dict
 from serializable import Serializable
 from rllab.spaces.box import Box
-from sawyer_control.srv import observation
-from sawyer_control.msg import actions
-from sawyer_control.srv import getRobotPoseAndJacobian
 from rllab.envs.base import Env
 
+from sawyer_control.srv import observation
+from sawyer_control.srv import getRobotPoseAndJacobian
+from sawyer_control.msg import actions
+from intera_core_msgs.msg import SEAJointState
+
+
 from sawyer_control.position_pd_controller import PositionPDController
+import pdb
 
 
 class SawyerEnv(Env, Serializable):
@@ -67,6 +71,10 @@ class SawyerEnv(Env, Serializable):
         self._set_action_space()
         self._set_observation_space()
         self.get_latest_pose_jacobian_dict()
+        self.previous_angles = self._joint_angles()
+        _, _, observed_torques, _ = self.request_observation()
+        self.previous_torques = np.array(observed_torques)
+
         self.in_reset = True
         self.amplify = np.ones(1) #by default, no amplifications
 
@@ -188,9 +196,14 @@ class SawyerEnv(Env, Serializable):
     def unexpected_torque_check(self):
         #TODO: redesign this check
         #we care about the torque that was observed to make sure it hasn't gone too high
-        new_torques = self.get_observed_torques_minus_gravity()
+#        zero_g_torques = np.array(self.request_zero_g_torques())
+        _, _, observed_torques, _ = self.request_observation()
+        observed_torques = np.array(observed_torques)
+
+        new_torques = observed_torques - self.previous_torques
+        self.previous_torques = observed_torques
         if not self.in_reset:
-            ERROR_THRESHOLD = np.array([25, 25, 25, 25, 666, 666, 10])
+            ERROR_THRESHOLD = np.array([5, 5, 5, 5, 5, 5, 5])
             is_peaks = (np.abs(new_torques) > ERROR_THRESHOLD).any()
             if is_peaks:
                 print('unexpected_torque during train/eval: ', new_torques)
@@ -432,6 +445,14 @@ class SawyerEnv(Env, Serializable):
 
     def send_action(self, action):
         self.action_publisher.publish(action)
+
+    def request_zero_g_torques(self):
+        topic = 'robot/limb/right/gravity_compensation_torques'
+        try:
+            return rospy.wait_for_message(topic, SEAJointState).gravity_model_effort
+        except rospy.ServiceException as e:
+            print(e)
+
 
     def request_observation(self):
         rospy.wait_for_service('observations')
