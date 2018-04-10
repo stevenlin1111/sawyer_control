@@ -172,7 +172,6 @@ class SawyerEnv(Env, Serializable):
         raise NotImplementedError
 
     def safety_box_check(self):
-        # TODO: tune this check
         self.get_latest_pose_jacobian_dict()
         truncated_dict = self.check_joints_in_box()
         terminate_episode = False
@@ -187,36 +186,31 @@ class SawyerEnv(Env, Serializable):
                         raise EnvironmentError('safety box failure during reset: ', joint, dist)
         return terminate_episode
 
-    def jacobian_check(self):
-        #TODO: FIX THIS
-        ee_jac = self.pose_jacobian_dict['right_hand'](1)
-        if np.linalg.det(ee_jac) == 0:
-            self._act(self._randomize_desired_angles())
-
     def unexpected_torque_check(self):
-        #TODO: redesign this check
-        #we care about the torque that was observed to make sure it hasn't gone too high
-#        zero_g_torques = np.array(self.request_zero_g_torques())
-        _, _, observed_torques, _ = self.request_observation()
+        # Checks that there wasn't a sudden change in torque
+        # zero_g_torques = np.array(self.request_zero_g_torques())
+        _, velocities, observed_torques, _ = self.request_observation()
         observed_torques = np.array(observed_torques)
 
         new_torques = observed_torques - self.previous_torques
         self.previous_torques = observed_torques
+        velocities = np.array(velocities)
+        print(new_torques[0], velocities[0])
         if not self.in_reset:
-            ERROR_THRESHOLD = np.array([5, 5, 5, 5, 5, 5, 5])
-            is_peaks = (np.abs(new_torques) > ERROR_THRESHOLD).any()
-            if is_peaks:
-                print('unexpected_torque during train/eval: ', new_torques)
-                return True
+            ERROR_THRESHOLD = np.array([3, 3, 2.5, 3, 2, 2, 2])
+            for velocity, new_torque, ERROR in zip(new_torques, velocities, ERROR_THRESHOLD):
+                if np.abs(new_torque) > ERROR and np.abs(velocity) < .5:
+                    print('unexpected_torque during train/eval: ', new_torques)
+                    return True
         else:
-            ERROR_THRESHOLD = np.array([25, 25, 25, 30, 666, 666, 10])
-            is_peaks = (np.abs(new_torques) > ERROR_THRESHOLD).any()
-            if is_peaks:
-                raise EnvironmentError('unexpected torques during reset: ', new_torques)
+            ERROR_THRESHOLD = np.array([6, 6, 5, 6, 5, 5, 5])
+            for velocity, new_torque, ERROR in zip(new_torques, velocities, ERROR_THRESHOLD):
+                if np.abs(new_torque) > ERROR and np.abs(velocity) < .5:
+                    raise EnvironmentError('unexpected torques during reset: ', new_torques)
         return False
 
     def unexpected_velocity_check(self):
-        #TODO: tune this check
+        #TODO: tune this check. Thinking removing this is probably ok if torque check is used
         _, velocities, _, _ = self.request_observation()
         velocities = np.array(velocities)
         ERROR_THRESHOLD = 5 * np.ones(7)
@@ -234,8 +228,8 @@ class SawyerEnv(Env, Serializable):
         new_torques = np.abs(commanded_torques)
         current_angles = self._joint_angles()
         position_deltas = np.abs(current_angles - self.previous_angles)
-        DELTA_THRESHOLD = .05 * np.ones(7)
-        ERROR_THRESHOLD = [11, 15, 15, 15, 666, 666, 10]
+        DELTA_THRESHOLD = .04 * np.ones(7)
+        ERROR_THRESHOLD = [5, 5, 5, 5, 5, 5, 5]
         violation = False
         for i in range(len(new_torques)):
             if new_torques[i] > ERROR_THRESHOLD[i] and position_deltas[i] < DELTA_THRESHOLD[i]:
